@@ -1,6 +1,8 @@
 import {verifyWebhook,whopRequest,normalizePayment,API_VERSION} from '@/lib/whop.mjs';
 import {rpc} from '@/lib/db';
 export const runtime='nodejs';
+// Log identifiers and outcomes only; never credentials, raw payloads, or sponsor details.
+const log=(stage:string,eventId?:string,paymentId?:string)=>console.info(JSON.stringify({service:'whop-webhook',stage,eventId,paymentId}));
 export async function POST(request:Request){
  if(!process.env.WHOP_WEBHOOK_SECRET)return new Response('Webhook not configured',{status:503});
  if(Number(request.headers.get('content-length')||0)>262144)return new Response(null,{status:413});
@@ -12,10 +14,12 @@ export async function POST(request:Request){
  // Independently retrieve authoritative payment state; redirect URLs never grant ownership.
  const payment=await whopRequest(`/payments/${encodeURIComponent(id)}`);
  let normalized;
- try{normalized=normalizePayment(payment,process.env.WHOP_ACCOUNT_ID)}catch{
+ try{if(payment.id!==id)throw new Error('Payment identity mismatch');normalized=normalizePayment(payment,process.env.WHOP_ACCOUNT_ID)}catch{
  await rpc('sms_payment_review',{p_event:event.id,p_payment:id,p_reason:'Payment eligibility or schema needs review'});
+ log('review',event.id,id);
  return new Response('Recorded for review',{status:200});}
- await rpc('sms_apply_payment',{p_event:event.id,p_payment:normalized.paymentId,p_reservation:normalized.reservationId,p_checkout:normalized.checkoutId,p_plan:normalized.planId,p_amount:normalized.amountCents,p_paid_at:normalized.paidAt});
+ const outcome=await rpc('sms_apply_payment',{p_event:event.id,p_payment:normalized.paymentId,p_reservation:normalized.reservationId,p_checkout:normalized.checkoutId,p_plan:normalized.planId,p_amount:normalized.amountCents,p_paid_at:normalized.paidAt});
+ log(String(outcome),event.id,id);
  return new Response('OK',{status:200});
- }catch{return new Response('Retry required',{status:503})}
+ }catch{log('processing_failed_retry_required',event.id,id);return new Response('Retry required',{status:503})}
 }
