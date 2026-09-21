@@ -39,4 +39,4 @@ Before any live payment:
 
 ## Secrets
 
-Use server-only `WHOP_API_KEY`, `WHOP_ACCOUNT_ID`, `WHOP_WEBHOOK_SECRET`, `WHOP_PLAN_IDS_JSON`, `RATE_LIMIT_SALT`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `SITE_URL`. `.env.example` has placeholders only. No credentials or checkout URLs are embedded in the frontend.
+Use server-only `WHOP_API_KEY`, `WHOP_ACCOUNT_ID`, `WHOP_WEBHOOK_SECRET`, `WHOP_PLAN_IDS_JSON`, `RATE_LIMIT_SALT`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, and `SITE_URL`. `.env.example` has placeholders only. No credentials or checkout URLs are embedded in the frontend.

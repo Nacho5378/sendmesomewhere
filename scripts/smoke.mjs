@@ -1,7 +1,7 @@
 import {spawn} from 'node:child_process';
 import assert from 'node:assert/strict';
 const port=4317,base=`http://127.0.0.1:${port}`;
-const server=spawn(process.execPath,['node_modules/next/dist/bin/next','start','--hostname','127.0.0.1','--port',String(port)],{stdio:'pipe',env:{...process.env,PAYMENTS_ENABLED:'true',SUPABASE_URL:'',SUPABASE_SERVICE_ROLE_KEY:'',WHOP_WEBHOOK_SECRET:''}});
+const server=spawn(process.execPath,['node_modules/next/dist/bin/next','start','--hostname','127.0.0.1','--port',String(port)],{stdio:'pipe',env:{...process.env,PAYMENTS_ENABLED:'true',SUPABASE_URL:'',SUPABASE_SECRET_KEY:'',SUPABASE_SERVICE_ROLE_KEY:'',WHOP_WEBHOOK_SECRET:''}});
 let log='';server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);
 try{
  let ready=false;for(let i=0;i<80;i++){try{const r=await fetch(base);if(r.ok){ready=true;break}}catch{}await new Promise(r=>setTimeout(r,150))}

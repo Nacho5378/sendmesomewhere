@@ -11,11 +11,15 @@ create table public.sms_positions (
  opening_cents bigint not null check(opening_cents>0), current_price_cents bigint not null check(current_price_cents>0),
  owner_name text, paid_cents bigint not null default 0, purchases int not null default 0 check(purchases>=0)
 );
+create table public.sms_plan_mappings (position_id text primary key references public.sms_positions, plan_id text not null unique, unique(position_id,plan_id));
+alter table public.sms_plan_mappings enable row level security;
+revoke all on public.sms_plan_mappings from public,anon,authenticated;
 create table public.sms_reservations (
  id uuid primary key default gen_random_uuid(), position_id text not null references public.sms_positions,
  sponsor_name text not null check(length(sponsor_name) between 2 and 60), price_cents bigint not null,
  client_hash text not null, plan_id text not null, checkout_id text unique, created_at timestamptz not null default now(),
- state text not null default 'pending' check(state in ('pending','applied','canceled','review'))
+ state text not null default 'pending' check(state in ('pending','applied','canceled','review')),
+ foreign key(position_id,plan_id) references public.sms_plan_mappings(position_id,plan_id)
 );
 create unique index sms_one_pending on public.sms_reservations(position_id) where state in ('pending','review');
 create table public.sms_payments (
@@ -83,7 +87,8 @@ begin
  select * into p from sms_positions where id=r.position_id for update;
  select * into c from sms_campaign where id='addis-dubai-2026' for share;
  -- Compare paid_at, not arrival time: delayed webhooks from valid in-window payments are accepted.
- if c.starts_at is null or c.status not in ('live','closed') or p_paid_at<c.starts_at or p_paid_at>=c.ends_at then reason:='Payment outside approved auction window';
+ if p_paid_at is null or p_amount is null or p_checkout is null or p_plan is null then reason:='Missing payment binding';
+ elsif c.starts_at is null or c.status not in ('live','closed') or p_paid_at<c.starts_at or p_paid_at>=c.ends_at then reason:='Payment outside approved auction window';
  elsif r.state<>'pending' or r.checkout_id is null or r.checkout_id<>p_checkout or r.plan_id<>p_plan then reason:='Checkout or reservation mismatch';
  elsif p_amount<>r.price_cents or p_amount<>p.current_price_cents then reason:='Price mismatch';
  elsif p.owner_name is not null or p.purchases<>0 then reason:='Conflicting ownership; takeover workflow is disabled';
@@ -123,3 +128,63 @@ insert into public.sms_positions(id,name,number,category,description,opening_cen
 ('luggage','Luggage',13,'gear','A placement on the carry-on for Mission 01.',25000,25000),
 ('hat','Hat',14,'gear','A front-facing placement on the mission cap.',25000,25000),
 ('wildcard','Wildcard',15,'gear','A special placement, with the final format agreed before launch.',25000,25000);
+
+insert into public.sms_plan_mappings(position_id,plan_id) values
+('main-chest','plan_NbZdp4aXSiPj9'),
+('main-back','plan_1vPxB2OBUEVAh'),
+('left-chest','plan_KmNJrt2AIco0U'),
+('right-chest','plan_RbETKFIPxbZ1g'),
+('left-shoulder','plan_Yi2jNLiwdrr93'),
+('right-shoulder','plan_lOZ9zzXgq1IG1'),
+('left-sleeve','plan_rKydDx17MTyMo'),
+('right-sleeve','plan_OPgvWOAiHqThB'),
+('left-forearm','plan_PDsFeu1rIMaCf'),
+('right-forearm','plan_rA2ng4wKZBrCs'),
+('laptop','plan_upQEocsUxBcG2'),
+('backpack','plan_ml956FAQIXBZj'),
+('luggage','plan_OhrnAykZK6ZF6'),
+('hat','plan_wrbm2BCyRQoLN'),
+('wildcard','plan_8x39ZI3KtNaSe');
+
+-- Immutable application audit: written in the same transaction as ownership.
+create table public.sms_ownership_history (
+ id uuid primary key default gen_random_uuid(),
+ payment_id text not null unique references public.sms_payments,
+ position_id text not null references public.sms_positions,
+ previous_owner text, new_owner text not null,
+ paid_cents bigint not null, next_price_cents bigint not null,
+ created_at timestamptz not null default now()
+);
+-- Review ledger only. No refund calls or takeover execution are authorized.
+create table public.sms_takeover_history (
+ id uuid primary key default gen_random_uuid(),
+ payment_id text not null unique references public.sms_payments,
+ position_id text not null references public.sms_positions,
+ previous_owner text, proposed_owner text not null,
+ state text not null default 'blocked' check(state='blocked'),
+ reason text not null, created_at timestamptz not null default now()
+);
+alter table public.sms_ownership_history enable row level security;
+alter table public.sms_takeover_history enable row level security;
+revoke all on public.sms_ownership_history,public.sms_takeover_history from public,anon,authenticated;
+create function public.sms_audit_payment() returns trigger language plpgsql set search_path=public as $$
+declare r sms_reservations; p sms_positions;
+begin
+ if new.reservation_id is null then return new; end if;
+ select * into r from sms_reservations where id=new.reservation_id;
+ select * into p from sms_positions where id=r.position_id;
+ if new.state='applied' then
+  insert into sms_ownership_history(payment_id,position_id,previous_owner,new_owner,paid_cents,next_price_cents)
+  values(new.payment_id,p.id,p.owner_name,r.sponsor_name,new.amount_cents,new.amount_cents*2);
+ elsif p.owner_name is not null or p.purchases>0 then
+  insert into sms_takeover_history(payment_id,position_id,previous_owner,proposed_owner,reason)
+  values(new.payment_id,p.id,p.owner_name,r.sponsor_name,coalesce(new.reason,'Takeovers disabled'));
+ end if;
+ return new;
+end; $$;
+revoke all on function public.sms_audit_payment() from public,anon,authenticated;
+create trigger sms_payment_audit after insert on public.sms_payments for each row execute function public.sms_audit_payment();
+create index sms_payments_reservation_idx on public.sms_payments(reservation_id);
+create index sms_ownership_position_idx on public.sms_ownership_history(position_id);
+create index sms_takeover_position_idx on public.sms_takeover_history(position_id);
+create index sms_reservation_client_created_idx on public.sms_reservations(client_hash,created_at);
