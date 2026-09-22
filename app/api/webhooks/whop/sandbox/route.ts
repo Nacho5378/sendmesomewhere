@@ -9,7 +9,9 @@ export async function POST(request:Request){
  if(!secret||!key||!account)return new Response('Sandbox webhook not configured',{status:503});
  if(Number(request.headers.get('content-length')||0)>262144)return new Response(null,{status:413});
  let event;try{const raw=await request.text();if(raw.length>262144)return new Response(null,{status:413});event=verifyWebhook(raw,request.headers,secret)}catch{return new Response('Invalid signature',{status:401})}
- if(event.account_id!==account||event.api_version_date!==API_VERSION||event.api_version!=='v1')return new Response('Incorrect sandbox webhook scope or version',{status:400});
+ const eventAccount=event.account_id??event.company_id;
+ const versionDateAccepted=event.api_version_date==null||event.api_version_date===API_VERSION;
+ if(eventAccount!==account||!versionDateAccepted||event.api_version!=='v1')return new Response('Incorrect sandbox webhook scope or version',{status:400});
  if(event.type!=='payment.succeeded')return new Response('Ignored',{status:200});
  const id=event.data?.id;if(typeof id!=='string'||!/^pay_[a-zA-Z0-9]+$/.test(id))return new Response('Invalid payment id',{status:400});
  try{
