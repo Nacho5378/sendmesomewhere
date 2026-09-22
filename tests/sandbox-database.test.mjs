@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {PGlite} from '@electric-sql/pglite';
+
+test('sandbox payment is isolated, atomic, and idempotent',async()=>{
+ const db=new PGlite();
+ await db.exec('create role anon; create role authenticated; create role service_role;');
+ await db.exec(await readFile(new URL('../db/001_campaign.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../db/002_sandbox_e2e.sql',import.meta.url),'utf8'));
+ const q=(sql,args=[])=>db.query(sql,args);
+ await q("insert into sms_sandbox_plan_mappings(position_id,plan_id) values('wildcard','plan_sandbox')");
+ const reservation=(await q("select sms_sandbox_reserve('Sandbox E2E Sponsor','plan_sandbox') as r")).rows[0].r;
+ assert.equal(reservation.priceCents,25000);
+ await q('select sms_sandbox_bind_checkout($1,$2)',[reservation.id,'ch_sandbox']);
+ const args=['evt_sandbox','pay_sandbox',reservation.id,'ch_sandbox','plan_sandbox',25000];
+ const sql='select sms_sandbox_apply_payment($1,$2,$3,$4,$5,$6,now()) as result';
+ assert.equal((await q(sql,args)).rows[0].result,'applied');
+ assert.equal((await q(sql,args)).rows[0].result,'duplicate');
+ const position=(await q("select * from sms_sandbox_positions where id='wildcard'")).rows[0];
+ assert.equal(position.owner_name,'Sandbox E2E Sponsor');
+ assert.equal(Number(position.current_price_cents),50000);
+ assert.equal((await q('select * from sms_sandbox_payments')).rows.length,1);
+ assert.equal((await q('select * from sms_sandbox_activity')).rows.length,1);
+ assert.equal((await q('select * from sms_sandbox_ownership_history')).rows.length,1);
+ assert.equal((await q('select * from sms_payments')).rows.length,0);
+ assert.equal((await q('select * from sms_activity')).rows.length,0);
+ assert.equal((await q("select owner_name from sms_positions where id='wildcard'")).rows[0].owner_name,null);
+ await assert.rejects(q("select sms_sandbox_reserve('Second Sponsor','plan_sandbox')"),/already completed/);
+ await db.close();
+});
