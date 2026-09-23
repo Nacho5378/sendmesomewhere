@@ -9,5 +9,7 @@ export async function rpc<T>(name:string,body:Record<string,unknown>={}):Promise
  if(key.startsWith('eyJ'))headers.Authorization=`Bearer ${key}`;
  const response=await fetch(`${url.replace(/\/$/,'')}/rest/v1/rpc/${name}`,{method:'POST',headers,body:JSON.stringify(body),cache:'no-store',signal:AbortSignal.timeout(8000)});
  if(!response.ok)throw new Error(`Database operation failed (${response.status})`);
- return response.json() as Promise<T>;
+ if(response.status===204)return undefined as T;
+ const raw=await response.text();
+ return (raw?JSON.parse(raw):undefined) as T;
 }

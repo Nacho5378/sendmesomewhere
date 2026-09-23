@@ -16,7 +16,6 @@ export async function POST(request:Request){
   const client=createHash('sha256').update(`controlled-production-e2e:${process.env.WHOP_PRODUCTION_TEST_TOKEN}`).digest('hex');
   const reservation=await rpc<{id:string;priceCents:number;checkoutId:string|null}>('sms_reserve_controlled_wildcard',{p_name:sponsorName,p_client:client,p_plan:planId});
   if(reservation.priceCents!==25000)throw new Error('Wildcard price mismatch');
-  if(reservation.checkoutId)return Response.json({state:'ready',checkoutId:reservation.checkoutId},{headers:privateHeaders});
   const origin=process.env.SITE_URL;if(!origin)throw new Error('Site URL missing');
   const config=await whopRequest('/checkout_configurations',{method:'POST',headers:{'Idempotency-Key':reservation.id},body:JSON.stringify({
    account_id:process.env.WHOP_ACCOUNT_ID,plan_id:planId,mode:'payment',
@@ -24,9 +23,10 @@ export async function POST(request:Request){
    redirect_url:new URL('/?checkout=controlled-test-returned',origin).href
   })});
   if(config.account_id!==process.env.WHOP_ACCOUNT_ID||config.plan?.id!==planId||config.plan?.plan_type!=='one_time'||config.plan?.currency!=='usd'||Math.round(Number(config.plan?.initial_price)*100)!==25000)throw new Error('Checkout verification failed');
+  if(reservation.checkoutId&&reservation.checkoutId!==config.id)throw new Error('Checkout binding mismatch');
   const url=new URL(config.purchase_url);if(url.protocol!=='https:'||!(url.hostname==='whop.com'||url.hostname.endsWith('.whop.com')))throw new Error('Invalid checkout URL');
-  await rpc('sms_bind_checkout',{p_id:reservation.id,p_checkout:config.id});
-  return Response.json({state:'created',checkoutId:config.id,url:url.href},{headers:privateHeaders});
+  if(!reservation.checkoutId)await rpc('sms_bind_checkout',{p_id:reservation.id,p_checkout:config.id});
+  return Response.json({state:reservation.checkoutId?'ready':'created',checkoutId:config.id,url:url.href},{headers:privateHeaders});
  }catch(error){
   console.error(JSON.stringify({service:'controlled-production-e2e',stage:'checkout_failed',message:error instanceof Error?error.message:'unknown'}));
   return Response.json({error:'Controlled checkout could not be prepared.'},{status:409,headers:privateHeaders});
