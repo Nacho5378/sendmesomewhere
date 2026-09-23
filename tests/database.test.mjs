@@ -6,6 +6,7 @@ import {PGlite} from '@electric-sql/pglite';
 test('database enforces ownership, idempotency, exact prices, and launch boundaries',async t=>{
  const db=new PGlite();await db.exec('create role anon; create role authenticated; create role service_role;');
  await db.exec(await readFile(new URL('../db/001_campaign.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../db/002_controlled_production_test.sql',import.meta.url),'utf8'));
  const q=(sql,args=[])=>db.query(sql,args);
  await t.test('initial database is a truthful closed preview',async()=>{const {rows}=await q('select sms_public_snapshot() as snapshot');const p=rows[0].snapshot;assert.equal(p.positions.length,15);assert.equal(p.totalCents,0);assert.equal(p.status,'preview');assert.equal(p.startsAt,null);assert.deepEqual(p.activity,[]);await assert.rejects(q("select sms_reserve('wildcard','Test Brand','client1','plan_8x39ZI3KtNaSe')"),/not open/)});
  await q("update sms_campaign set status='live', starts_at=now()-interval '1 hour', ends_at=now()+interval '71 hours'");
@@ -26,5 +27,28 @@ test('database enforces ownership, idempotency, exact prices, and launch boundar
  assert.equal(rows.length,1);assert.equal(rows[0].payment_id,'pay_1');assert.equal(Number(rows[0].next_price_cents),50000);
  assert.equal((await q('select * from sms_takeover_history')).rows.length,0);
  });
+ await db.close();
+});
+
+test('controlled production test is Wildcard-only and does not open the campaign',async()=>{
+ const db=new PGlite();await db.exec('create role anon; create role authenticated; create role service_role;');
+ await db.exec(await readFile(new URL('../db/001_campaign.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../db/002_controlled_production_test.sql',import.meta.url),'utf8'));
+ const q=(sql,args=[])=>db.query(sql,args);
+ const first=(await q("select sms_reserve_controlled_wildcard('Send Me Somewhere E2E Test','private-token-hash','plan_8x39ZI3KtNaSe') as r")).rows[0].r;
+ const repeated=(await q("select sms_reserve_controlled_wildcard('Send Me Somewhere E2E Test','private-token-hash','plan_8x39ZI3KtNaSe') as r")).rows[0].r;
+ assert.equal(first.id,repeated.id);assert.equal(first.priceCents,25000);
+ assert.equal((await q("select status from sms_campaign where id='addis-dubai-2026'")).rows[0].status,'preview');
+ await q('select sms_bind_checkout($1,$2)',[first.id,'ch_controlled']);
+ const args=['evt_controlled','pay_controlled',first.id,'ch_controlled','plan_8x39ZI3KtNaSe',25000];
+ assert.equal((await q('select sms_apply_payment($1,$2,$3,$4,$5,$6,now()) as r',args)).rows[0].r,'applied');
+ assert.equal((await q('select sms_apply_payment($1,$2,$3,$4,$5,$6,now()) as r',args)).rows[0].r,'duplicate');
+ const position=(await q("select owner_name,current_price_cents from sms_positions where id='wildcard'")).rows[0];
+ assert.equal(position.owner_name,'Send Me Somewhere E2E Test');assert.equal(Number(position.current_price_cents),50000);
+ assert.equal((await q('select count(*)::int as n from sms_payments')).rows[0].n,1);
+ assert.equal((await q('select count(*)::int as n from sms_activity')).rows[0].n,1);
+ assert.equal((await q('select count(*)::int as n from sms_ownership_history')).rows[0].n,1);
+ assert.equal((await q('select count(*)::int as n from sms_takeover_history')).rows[0].n,0);
+ assert.equal((await q("select count(*)::int as n from sms_positions where id<>'wildcard' and (owner_name is not null or purchases<>0 or current_price_cents<>opening_cents)")).rows[0].n,0);
  await db.close();
 });
