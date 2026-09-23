@@ -20,3 +20,9 @@ test('webhook rejects stale and future timestamps',()=>{for(const t of [String(n
 test('money conversion is exact and rejects unsupported currencies',()=>{assert.equal(usdCents({amount:'250.00',currency:'usd',decimals:2}),25000);assert.equal(usdCents({amount:'0.29',currency:'usd',decimals:2}),29);assert.throws(()=>usdCents({amount:'250.001',currency:'usd',decimals:2}));assert.throws(()=>usdCents({amount:'250',currency:'eur',decimals:2}))});
 const payment={id:'pay_test',account_id:'biz_test',status:'paid',substatus:'succeeded',auto_refunded:false,checkout_configuration_id:'ch_test',plan_id:'plan_test',metadata:{reservation_id:'6fb3f284-5910-4431-9b64-dcf8583597a9'},subtotal:{amount:'250.00',currency:'usd',decimals:2},paid_at:'2026-09-20T12:00:00Z'};
 test('only verified paid, unrefunded payments from the correct merchant qualify',()=>{assert.equal(normalizePayment(payment,'biz_test').amountCents,25000);for(const changed of [{account_id:'biz_other'},{status:'pending'},{substatus:'refunded'},{metadata:{}},{auto_refunded:true},{discount_amount:{amount:'1.00',currency:'usd',decimals:2}}])assert.throws(()=>normalizePayment({...payment,...changed},'biz_test'))});
+test('current Whop payment schema normalizes nested company, plan and numeric amounts',()=>{
+ const current={...payment,account_id:undefined,company:{id:'biz_test'},plan_id:undefined,plan:{id:'plan_test'},subtotal:250,currency:'usd',refunded_amount:0,discount_amount:0};
+ assert.deepEqual(normalizePayment(current,'biz_test'),{paymentId:'pay_test',reservationId:payment.metadata.reservation_id,checkoutId:'ch_test',planId:'plan_test',amountCents:25000,paidAt:payment.paid_at});
+ assert.throws(()=>normalizePayment({...current,currency:'eur'},'biz_test'));
+ assert.throws(()=>normalizePayment({...current,subtotal:250.001},'biz_test'));
+});
