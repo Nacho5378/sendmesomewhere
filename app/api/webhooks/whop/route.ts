@@ -1,7 +1,6 @@
 import {verifyWebhook,whopRequest,normalizePayment,normalizeSupportPayment,API_VERSION} from '@/lib/whop.mjs';
 import {rpc} from '@/lib/db';
 export const runtime='nodejs';
-// Log identifiers and outcomes only; never credentials, raw payloads, sponsor details, or supporter details.
 const log=(stage:string,eventId?:string,paymentId?:string)=>console.info(JSON.stringify({service:'whop-webhook',stage,eventId,paymentId}));
 export async function POST(request:Request){
  if(!process.env.WHOP_WEBHOOK_SECRET)return new Response('Webhook not configured',{status:503});
@@ -13,8 +12,11 @@ export async function POST(request:Request){
  if(event.type!=='payment.succeeded')return new Response('Ignored',{status:200});
  const id=event.data?.id;if(typeof id!=='string'||!/^pay_[a-zA-Z0-9]+$/.test(id))return new Response('Invalid payment id',{status:400});
  try{
-  // Independently retrieve authoritative payment state; redirects never grant sponsorship ownership or mission credit.
-  const payment=await whopRequest(`/payments/${encodeURIComponent(id)}`);
+  // Support payments are retrieved with the dedicated support key; corporate remains on the existing key.
+  const supportEvent=!!event.data?.metadata?.support_checkout_id;
+  const apiKey=supportEvent?process.env.WHOP_SUPPORT_API_KEY:process.env.WHOP_API_KEY;
+  if(!apiKey)throw new Error('Whop key missing');
+  const payment=await whopRequest(`/payments/${encodeURIComponent(id)}`,{apiKey});
   if(payment.id!==id)throw new Error('Payment identity mismatch');
   if(payment.metadata?.support_checkout_id){
    let normalized;
