@@ -26,14 +26,14 @@ export async function POST(request:Request){
  if(!Number.isSafeInteger(amountCents)||amountCents<100||amountCents>820000)return Response.json({error:'Choose an amount from $1 to $8,200.'},{status:400});
  if(ref&&(!/^[A-Za-z0-9._-]+$/.test(ref)||ref.length>80))return Response.json({error:'Invalid referral code.'},{status:400});
  try{
-  if(!process.env.WHOP_ACCOUNT_ID)throw new Error('Whop account missing');
+  if(!process.env.WHOP_ACCOUNT_ID||!process.env.WHOP_SUPPORT_API_KEY)throw new Error('Support Whop setup missing');
   const clientKey=createHash('sha256').update(`${process.env.RATE_LIMIT_SALT}:${request.headers.get('x-vercel-forwarded-for')||'unknown'}`).digest('hex');
   const reservation=await rpc<{id:string;amountCents:number}>('sms_support_reserve',{p_amount:amountCents,p_source:source,p_ref:ref||null,p_client:clientKey});
   const mapped=planMap()[String(amountCents)];
   let planId=mapped;
   if(!planId){
    if(!process.env.WHOP_SUPPORT_PRODUCT_ID)throw new Error('Support product missing');
-   const plan=await whopRequest('/plans',{method:'POST',headers:{'Idempotency-Key':`support-plan-${reservation.id}`},body:JSON.stringify({
+   const plan=await whopRequest('/plans',{apiKey:process.env.WHOP_SUPPORT_API_KEY,method:'POST',headers:{'Idempotency-Key':`support-plan-${amountCents}`},body:JSON.stringify({
     company_id:process.env.WHOP_ACCOUNT_ID,
     product_id:process.env.WHOP_SUPPORT_PRODUCT_ID,
     plan_type:'one_time',
@@ -49,7 +49,7 @@ export async function POST(request:Request){
    planId=plan.id;
   }
   if(!/^plan_[a-zA-Z0-9]+$/.test(planId))throw new Error('Invalid support plan');
-  const config=await whopRequest('/checkout_configurations',{method:'POST',headers:{'Idempotency-Key':reservation.id},body:JSON.stringify({
+  const config=await whopRequest('/checkout_configurations',{apiKey:process.env.WHOP_SUPPORT_API_KEY,method:'POST',headers:{'Idempotency-Key':reservation.id},body:JSON.stringify({
    account_id:process.env.WHOP_ACCOUNT_ID,
    plan_id:planId,
    mode:'payment',
